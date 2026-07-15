@@ -144,7 +144,7 @@
   <div id="startScreen">
     <div class="start-inner">
       <h1>手勢聚氣占卜</h1>
-      <p>伸出雙手,讓兩掌心緩緩靠近,能量會隨距離聚集。<br>充滿並停留片刻,即可抽出一張命運之牌。</p>
+      <p>雙手於胸前相對,五指張開如蓮花綻放,<br>掌根緩緩靠近,能量會隨之聚集。<br>充滿並停留片刻,即可抽出一張命運之牌。</p>
       <button id="startBtn">開始占卜</button>
       <p class="hint">需要開啟相機權限。影像僅在裝置本機端運算,不會上傳或儲存。</p>
     </div>
@@ -249,11 +249,13 @@ const redrawBtn = document.getElementById('redrawBtn');
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /* ---------- 常數 ---------- */
-const CHARGE_THRESH = 2.5;      // 兩掌心距離 / 單手掌寬 的正規化閾值
+const CHARGE_THRESH = 2.5;      // 兩掌根(手腕)距離 / 單手掌寬 的正規化閾值
 const CHARGE_MIN_RATE = 6;      // %/秒,剛進入閾值時的充能速度
-const CHARGE_MAX_RATE = 55;     // %/秒,兩掌完全貼近時的充能速度
-const DECAY_RATE = 18;          // %/秒,手分開時的衰減速度(漸進,不瞬間歸零)
+const CHARGE_MAX_RATE = 55;     // %/秒,兩掌根完全貼近且指尖展開時的充能速度
+const DECAY_RATE = 18;          // %/秒,手分開或收攏時的衰減速度(漸進,不瞬間歸零)
 const HOLD_MS = 800;            // 充滿後需維持的時間
+const SPREAD_MIN = 0.32;        // 指尖平均間距 / 掌寬，低於此視為手指未張開（拳狀）
+const SPREAD_FULL = 0.62;       // 達到此比例視為手指完全展開（蓮花狀）
 const PARTICLE_COUNT = reducedMotion ? 140 : 420;
 
 /* ---------- 狀態 ---------- */
@@ -279,15 +281,23 @@ let particles = [];
 function lerp(a,b,t){ return a+(b-a)*t; }
 function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
 
-function palmCenterPx(lm, vw, vh){
-  const idxs = [0,5,9,13,17];
-  let sx=0, sy=0;
-  for(const i of idxs){ sx += lm[i].x*vw; sy += lm[i].y*vh; }
-  return {x: sx/idxs.length, y: sy/idxs.length};
-}
 function palmWidthPx(lm, vw, vh){
   const a = lm[5], b = lm[17];
   return Math.hypot((a.x-b.x)*vw, (a.y-b.y)*vh);
+}
+function wristPx(lm, vw, vh){
+  return {x: lm[0].x*vw, y: lm[0].y*vh};
+}
+/* 五指指尖(拇指~小指)相鄰間距的平均值，除以掌寬做正規化：數值越大代表手指張得越開（蓮花／鑽石手勢） */
+function fingerSpreadRatio(lm, vw, vh, palmWidth){
+  const tipIdx = [4, 8, 12, 16, 20];
+  const tips = tipIdx.map(i => ({x: lm[i].x*vw, y: lm[i].y*vh}));
+  let total = 0;
+  for(let i=0; i<tips.length-1; i++){
+    total += Math.hypot(tips[i].x-tips[i+1].x, tips[i].y-tips[i+1].y);
+  }
+  const avgGap = total / (tips.length-1);
+  return avgGap / Math.max(1, palmWidth);
 }
 
 /* xorshift32 混合，把手勢座標的低位小數位混進 32-bit 熵池（不使用 Math.random） */
@@ -451,21 +461,29 @@ function processHands(result, dtSec){
   const vw = video.videoWidth, vh = video.videoHeight;
 
   if(hands.length >= 2){
-    const centerA = palmCenterPx(hands[0], vw, vh);
-    const centerB = palmCenterPx(hands[1], vw, vh);
+    const wristA = wristPx(hands[0], vw, vh);
+    const wristB = wristPx(hands[1], vw, vh);
     const widthA = palmWidthPx(hands[0], vw, vh);
     const widthB = palmWidthPx(hands[1], vw, vh);
     const avgWidth = Math.max(1, (widthA+widthB)/2);
-    const dist = Math.hypot(centerA.x-centerB.x, centerA.y-centerB.y);
-    const normDist = dist/avgWidth;
+    const wristDist = Math.hypot(wristA.x-wristB.x, wristA.y-wristB.y);
+    const normDist = wristDist/avgWidth;
 
-    state.targetCenter.x = (centerA.x+centerB.x)/2;
-    state.targetCenter.y = (centerA.y+centerB.y)/2;
+    // 蓮花／鑽石手勢：掌根（手腕）靠近，同時兩手五指張開如扇
+    const spreadA = fingerSpreadRatio(hands[0], vw, vh, widthA);
+    const spreadB = fingerSpreadRatio(hands[1], vw, vh, widthB);
+    const spreadFactorA = clamp((spreadA-SPREAD_MIN)/(SPREAD_FULL-SPREAD_MIN), 0, 1);
+    const spreadFactorB = clamp((spreadB-SPREAD_MIN)/(SPREAD_FULL-SPREAD_MIN), 0, 1);
+    const spreadFactor = spreadFactorA * spreadFactorB;
+
+    // 粒子聚集點：兩掌根的中點，對應手勢中符文浮現的位置
+    state.targetCenter.x = (wristA.x+wristB.x)/2;
+    state.targetCenter.y = (wristA.y+wristB.y)/2;
 
     if(state.phase === 'gathering'){
-      if(normDist < CHARGE_THRESH){
+      if(normDist < CHARGE_THRESH && spreadFactor > 0){
         const closeness = clamp((CHARGE_THRESH-normDist)/CHARGE_THRESH, 0, 1);
-        const rate = lerp(CHARGE_MIN_RATE, CHARGE_MAX_RATE, closeness);
+        const rate = lerp(CHARGE_MIN_RATE, CHARGE_MAX_RATE, closeness) * spreadFactor;
         state.charge = clamp(state.charge + rate*dtSec, 0, 100);
       } else {
         state.charge = clamp(state.charge - DECAY_RATE*dtSec, 0, 100);
@@ -474,7 +492,7 @@ function processHands(result, dtSec){
     mixEntropy(hands[0]);
     mixEntropy(hands[1]);
   } else if(hands.length === 1){
-    state.targetCenter = palmCenterPx(hands[0], vw, vh);
+    state.targetCenter = wristPx(hands[0], vw, vh);
     if(state.phase === 'gathering'){
       state.charge = clamp(state.charge - DECAY_RATE*dtSec, 0, 100);
     }
