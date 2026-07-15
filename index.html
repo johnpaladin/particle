@@ -256,6 +256,9 @@ const DECAY_RATE = 18;          // %/秒,手分開或姿勢不對時的衰減速
 const HOLD_MS = 800;            // 充滿後需維持的時間
 // 手背相貼的「朝向」判定是用 2D 叉積估計，實機測試方向若相反，把這個值改成 -1 即可，不必動其他數學
 const BACK_ORIENTATION_SIGN = 1;
+// 單手「手背朝鏡頭」信心值至少要超過這個門檻才算數，避免掌心朝鏡頭（錯誤動作）時
+// 因偵測雜訊而拿到一點點充能——低於門檻一律視為 0，不給任何模糊地帶的分數
+const ORIENTATION_MIN = 0.15;
 const PARTICLE_COUNT = reducedMotion ? 140 : 420;
 
 /* ---------- 狀態 ---------- */
@@ -481,14 +484,17 @@ function processHands(result, dtSec){
     const labelB = (handedness[1] && handedness[1][0] && handedness[1][0].categoryName) || 'Right';
     const backA = backFacingFactor(hands[0], vw, vh, labelA, widthA);
     const backB = backFacingFactor(hands[1], vw, vh, labelB, widthB);
-    const orientationFactor = backA * backB;
+    // 兩手都要「明確」偵測到手背朝鏡頭才算數；掌心朝鏡頭（例如雙掌對鏡頭打招呼）
+    // 兩邊分數都會落在門檻以下，直接視為 0，不會因雜訊而拿到充能
+    const orientationOk = backA > ORIENTATION_MIN && backB > ORIENTATION_MIN;
+    const orientationFactor = orientationOk ? backA * backB : 0;
 
     // 粒子聚集點：兩掌根的中點，對應手勢中符文浮現的位置
     state.targetCenter.x = (wristA.x+wristB.x)/2;
     state.targetCenter.y = (wristA.y+wristB.y)/2;
 
     if(state.phase === 'gathering'){
-      if(normDist < CHARGE_THRESH && orientationFactor > 0){
+      if(normDist < CHARGE_THRESH && orientationOk){
         const closeness = clamp((CHARGE_THRESH-normDist)/CHARGE_THRESH, 0, 1);
         const rate = lerp(CHARGE_MIN_RATE, CHARGE_MAX_RATE, closeness) * orientationFactor;
         state.charge = clamp(state.charge + rate*dtSec, 0, 100);
