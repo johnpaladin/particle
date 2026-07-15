@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#05060a">
+<title>手勢聚氣占卜</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#05060a;
+    --panel:#0d0b12;
+    --gold:#d4af7a;
+    --gold-dim:#8a7350;
+    --ink:#e8e0d0;
+    --danger:#3a0d0d;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; height:100%; width:100%;
+    background:var(--bg); color:var(--ink); overflow:hidden;
+    font-family:"Noto Serif TC", "PMingLiU", "Songti TC", serif;
+    -webkit-tap-highlight-color:transparent;
+  }
+  #stageWrap{position:fixed; inset:0; overflow:hidden;}
+  #cam, #stage{
+    position:absolute; inset:0;
+    width:100%; height:100%;
+    object-fit:cover;
+    transform:scaleX(-1); /* mirror front camera; canvas is drawn in raw video-pixel space, so mirroring the whole element mirrors the particles with it automatically */
+  }
+  #cam{ filter:brightness(0.5) saturate(0.75) contrast(1.05); background:#000; }
+  #stage{ pointer-events:none; }
+
+  #title{
+    position:fixed; top:max(18px, env(safe-area-inset-top)); left:0; right:0;
+    text-align:center; pointer-events:none; z-index:5;
+  }
+  #title h1{
+    margin:0; font-size:18px; font-weight:600; letter-spacing:0.35em;
+    color:var(--gold); text-shadow:0 0 18px rgba(212,175,122,0.5);
+    opacity:0.85;
+  }
+
+  #status{
+    position:fixed; left:max(14px, env(safe-area-inset-left)); bottom:max(14px, env(safe-area-inset-bottom));
+    font-family:monospace, "Noto Serif TC", serif;
+    font-size:12px; letter-spacing:0.05em; color:var(--gold-dim);
+    background:rgba(5,6,10,0.45); padding:6px 10px; border-radius:6px;
+    z-index:5; pointer-events:none;
+  }
+
+  #errorBanner{
+    display:none; position:fixed; top:0; left:0; right:0; z-index:50;
+    background:var(--danger); color:#fdeaea; padding:14px 18px;
+    font-size:14px; line-height:1.6; text-align:center;
+    border-bottom:1px solid #7a1f1f;
+  }
+
+  #startScreen{
+    position:fixed; inset:0; z-index:20;
+    display:flex; align-items:center; justify-content:center;
+    background:radial-gradient(ellipse at center, #14101c 0%, #05060a 75%);
+    padding:24px; text-align:center;
+    transition:opacity 0.6s ease;
+  }
+  #startScreen.hidden{ opacity:0; pointer-events:none; }
+  .start-inner{ max-width:420px; }
+  .start-inner h1{
+    font-size:26px; letter-spacing:0.3em; color:var(--gold);
+    margin:0 0 18px; text-shadow:0 0 24px rgba(212,175,122,0.45);
+  }
+  .start-inner p{ font-size:14.5px; line-height:1.9; color:var(--ink); opacity:0.85; margin:0 0 22px; }
+  .start-inner p.hint{ font-size:12px; opacity:0.55; margin-top:18px; }
+  #startBtn{
+    font-family:inherit; font-size:16px; letter-spacing:0.2em;
+    padding:12px 34px; border-radius:999px;
+    background:transparent; color:var(--gold);
+    border:1px solid var(--gold-dim);
+    cursor:pointer; transition:all 0.25s ease;
+  }
+  #startBtn:not(:disabled):hover{ background:rgba(212,175,122,0.1); box-shadow:0 0 24px rgba(212,175,122,0.35); }
+  #startBtn:disabled{ opacity:0.5; cursor:default; }
+
+  #cardPanel{
+    position:fixed; inset:0; z-index:15;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:22px; padding:20px;
+    background:rgba(0,0,0,0.7);
+    opacity:0; pointer-events:none;
+    transition:opacity 0.9s ease;
+  }
+  #cardPanel.show{ opacity:1; pointer-events:auto; }
+  .card{
+    width:min(340px, 86vw); max-height:78vh; overflow-y:auto;
+    background:linear-gradient(180deg, rgba(20,16,26,0.95), rgba(10,8,13,0.97));
+    border:1px solid rgba(212,175,122,0.5);
+    border-radius:14px; padding:26px 22px 22px;
+    box-shadow:0 0 50px rgba(212,175,122,0.18), inset 0 0 30px rgba(212,175,122,0.06);
+    text-align:center;
+    transform:translateY(14px) scale(0.97);
+    transition:transform 0.9s cubic-bezier(.2,.9,.25,1);
+  }
+  #cardPanel.show .card{ transform:translateY(0) scale(1); }
+  .card-icon-svg{ width:88px; height:88px; margin-bottom:6px; color:var(--gold); }
+  .card-icon-svg *{ fill:none; stroke:var(--gold); stroke-width:3; stroke-linecap:round; stroke-linejoin:round; }
+  .card-num{ font-size:11px; letter-spacing:0.25em; color:var(--gold-dim); margin-bottom:8px; }
+  .card-name{ font-size:26px; margin:0 0 2px; color:var(--ink); font-weight:700; letter-spacing:0.08em; }
+  .card-trad{ font-size:12px; letter-spacing:0.1em; color:var(--gold-dim); margin-bottom:14px; font-style:italic; }
+  .card-keyword{
+    display:inline-block; font-size:13px; letter-spacing:0.15em;
+    color:var(--bg); background:var(--gold); padding:3px 14px;
+    border-radius:999px; margin-bottom:16px;
+  }
+  .card-text{ font-size:14.5px; line-height:2; color:var(--ink); opacity:0.9; margin:0; text-align:left; }
+  #redrawBtn{
+    font-family:inherit; font-size:14px; letter-spacing:0.2em;
+    padding:10px 30px; border-radius:999px;
+    background:transparent; color:var(--gold);
+    border:1px solid var(--gold-dim); cursor:pointer;
+    transition:all 0.25s ease;
+  }
+  #redrawBtn:hover{ background:rgba(212,175,122,0.1); box-shadow:0 0 20px rgba(212,175,122,0.3); }
+
+  @media (prefers-reduced-motion: reduce){
+    .card{ transition:opacity 0.4s ease; }
+    #cardPanel{ transition:opacity 0.4s ease; }
+  }
+</style>
+</head>
+<body>
+
+  <div id="stageWrap">
+    <video id="cam" autoplay muted playsinline></video>
+    <canvas id="stage"></canvas>
+  </div>
+
+  <header id="title"><h1>手勢聚氣占卜</h1></header>
+  <div id="status">充能 0% · 偵測到 0 隻手</div>
+  <div id="errorBanner" role="alert"></div>
+
+  <div id="startScreen">
+    <div class="start-inner">
+      <h1>手勢聚氣占卜</h1>
+      <p>伸出雙手,讓兩掌心緩緩靠近,能量會隨距離聚集。<br>充滿並停留片刻,即可抽出一張命運之牌。</p>
+      <button id="startBtn">開始占卜</button>
+      <p class="hint">需要開啟相機權限。影像僅在裝置本機端運算,不會上傳或儲存。</p>
+    </div>
+  </div>
+
+  <div id="cardPanel" class="card-overlay">
+    <div class="card" id="cardBody"></div>
+    <button id="redrawBtn">再抽一次</button>
+  </div>
+
+<script type="module">
+import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
+
+/* ---------- Lenormand 36 張牌資料 ---------- */
+const CARDS = [
+  {id:1, zh:"騎士", trad:"The Rider", kw:"音訊", text:"有消息正在路上,新的機會或訪客即將到來。事情會比預期更快有進展,保持留意四周的動靜。",
+   svg:`<circle cx="28" cy="65" r="9"/><line x1="36" y1="60" x2="78" y2="28"/><polyline points="62,28 78,28 78,44"/>`},
+  {id:2, zh:"幸運草", trad:"The Clover", kw:"機緣", text:"小小的幸運降臨,輕鬆卻短暫。別想太多,順勢接住這份意外之喜就好。",
+   svg:`<circle cx="50" cy="35" r="14"/><circle cx="36" cy="55" r="14"/><circle cx="64" cy="55" r="14"/><line x1="50" y1="60" x2="50" y2="85"/>`},
+  {id:3, zh:"船", trad:"The Ship", kw:"遠行", text:"一段旅程或跨越距離的機會正在醞釀。過程或許顛簸,但終點值得期待。",
+   svg:`<line x1="20" y1="70" x2="80" y2="70"/><polyline points="20,70 30,82 70,82 80,70"/><line x1="50" y1="70" x2="50" y2="20"/><polyline points="50,22 74,40 50,40"/>`},
+  {id:4, zh:"房屋", trad:"The House", kw:"安穩", text:"代表家庭、根基與安全感。此刻適合鞏固既有的關係與生活結構。",
+   svg:`<polyline points="20,55 50,25 80,55"/><rect x="28" y="55" width="44" height="30"/><line x1="50" y1="85" x2="50" y2="65"/>`},
+  {id:5, zh:"樹", trad:"The Tree", kw:"根基", text:"象徵健康與長期累積的力量。成長需要時間,急不得,也急不來。",
+   svg:`<line x1="50" y1="55" x2="50" y2="88"/><circle cx="50" cy="35" r="24"/>`},
+  {id:6, zh:"雲", trad:"The Clouds", kw:"混沌", text:"眼前有些模糊不清,情緒或局勢尚未明朗。稍安勿躁,雲總會散去。",
+   svg:`<circle cx="38" cy="55" r="16"/><circle cx="58" cy="48" r="20"/><circle cx="74" cy="58" r="13"/>`},
+  {id:7, zh:"蛇", trad:"The Snake", kw:"曲折", text:"暗示迂迴、誘惑或需要提防的人事物。聰明應對,別被表面迷惑。",
+   svg:`<path d="M20,70 Q35,40 50,60 Q65,80 80,50"/>`},
+  {id:8, zh:"棺材", trad:"The Coffin", kw:"終結", text:"一個階段畫下句點,也為新的開始騰出空間。放手有時是最好的前進方式。",
+   svg:`<polygon points="38,15 62,15 78,50 62,88 38,88 22,50"/>`},
+  {id:9, zh:"花束", trad:"The Bouquet", kw:"美意", text:"美好的邀請、讚美或禮物正在靠近。是值得欣賞與感謝的時刻。",
+   svg:`<line x1="50" y1="90" x2="50" y2="55"/><circle cx="50" cy="35" r="11"/><circle cx="32" cy="48" r="9"/><circle cx="68" cy="48" r="9"/>`},
+  {id:10, zh:"鐮刀", trad:"The Scythe", kw:"果斷", text:"需要當機立斷的時刻來臨,或有突如其來的變化。快、狠、準地做出決定。",
+   svg:`<path d="M70,20 A35,35 0 1,0 75,65"/><line x1="70" y1="20" x2="30" y2="90"/>`},
+  {id:11, zh:"樺樹枝", trad:"The Rod", kw:"磨練", text:"暗示摩擦、討論或需要紀律的考驗。衝突之中往往藏著成長的契機。",
+   svg:`<line x1="25" y1="20" x2="35" y2="85"/><line x1="42" y1="20" x2="48" y2="85"/><line x1="58" y1="20" x2="52" y2="85"/><line x1="75" y1="20" x2="65" y2="85"/>`},
+  {id:12, zh:"群鳥", trad:"The Birds", kw:"交流", text:"代表對話、消息與人際往來。留意雙向的溝通,話語會帶來影響。",
+   svg:`<path d="M14,55 Q26,38 38,55 Q50,38 62,55"/><path d="M45,70 Q57,53 69,70 Q81,53 93,70"/>`},
+  {id:13, zh:"孩童", trad:"The Child", kw:"初心", text:"新的開始、天真與可能性。以單純的心態看待眼前的事,會更輕鬆。",
+   svg:`<circle cx="50" cy="30" r="11"/><line x1="50" y1="41" x2="50" y2="70"/><line x1="50" y1="52" x2="35" y2="65"/><line x1="50" y1="52" x2="65" y2="65"/><line x1="50" y1="70" x2="38" y2="88"/><line x1="50" y1="70" x2="62" y2="88"/>`},
+  {id:14, zh:"狐狸", trad:"The Fox", kw:"機警", text:"提醒你保持警覺,尤其在工作或利益相關的場合。聰明但別自作聰明。",
+   svg:`<polygon points="50,18 30,55 70,55"/><polygon points="35,20 30,55 45,45"/><polygon points="65,20 70,55 55,45"/>`},
+  {id:15, zh:"熊", trad:"The Bear", kw:"守護", text:"象徵力量、保護欲與掌控感。你或身邊的人正扮演著支柱的角色。",
+   svg:`<circle cx="50" cy="55" r="26"/><circle cx="30" cy="28" r="9"/><circle cx="70" cy="28" r="9"/>`},
+  {id:16, zh:"星星", trad:"The Star", kw:"指引", text:"希望與方向浮現,靈感正在發生。抬頭看,答案往往比想像中清晰。",
+   svg:`<polygon points="50,10 60,38 90,38 66,56 75,86 50,68 25,86 34,56 10,38 40,38"/>`},
+  {id:17, zh:"鸛鳥", trad:"The Stork", kw:"轉變", text:"一次正向的改變正在發生,生活型態可能因此調整。順應變化,別抗拒。",
+   svg:`<line x1="50" y1="60" x2="50" y2="88"/><circle cx="50" cy="42" r="14"/><polyline points="50,42 28,32"/><line x1="40" y1="88" x2="60" y2="88"/>`},
+  {id:18, zh:"狗", trad:"The Dog", kw:"忠誠", text:"代表值得信賴的朋友或夥伴關係。真心對待,情誼會回報你。",
+   svg:`<rect x="28" y="45" width="44" height="26" rx="4"/><polygon points="30,45 24,25 40,45"/><line x1="72" y1="55" x2="88" y2="45"/>`},
+  {id:19, zh:"高塔", trad:"The Tower", kw:"格局", text:"象徵制度、距離感或更高的視角。也許現在該退一步,看清全局。",
+   svg:`<rect x="38" y="30" width="24" height="55"/><polyline points="30,30 38,30 38,18 44,18 44,30 56,30 56,18 62,18 62,30 70,30"/>`},
+  {id:20, zh:"花園", trad:"The Garden", kw:"社交", text:"人群聚集之處,公開場合的機會增加。適合展現自己、拓展人脈。",
+   svg:`<circle cx="30" cy="30" r="6" style="fill:var(--gold);stroke:none;"/><circle cx="50" cy="30" r="6" style="fill:var(--gold);stroke:none;"/><circle cx="70" cy="30" r="6" style="fill:var(--gold);stroke:none;"/><circle cx="30" cy="50" r="6" style="fill:var(--gold);stroke:none;"/><circle cx="50" cy="50" r="6" style="fill:var(--gold);stroke:none;"/><circle cx="70" cy="50" r="6" style="fill:var(--gold);stroke:none;"/><circle cx="30" cy="70" r="6" style="fill:var(--gold);stroke:none;"/><circle cx="50" cy="70" r="6" style="fill:var(--gold);stroke:none;"/><circle cx="70" cy="70" r="6" style="fill:var(--gold);stroke:none;"/>`},
+  {id:21, zh:"高山", trad:"The Mountain", kw:"阻礙", text:"眼前有明顯的障礙或延遲,需要繞道或蓄力才能跨越。耐心是關鍵。",
+   svg:`<polyline points="10,80 36,33 54,58 72,23 92,80"/>`},
+  {id:22, zh:"岔路", trad:"The Crossroad", kw:"抉擇", text:"面臨選擇的時刻,多條路徑同時展開。傾聽內心,再決定方向。",
+   svg:`<line x1="50" y1="90" x2="50" y2="55"/><line x1="50" y1="55" x2="25" y2="15"/><line x1="50" y1="55" x2="75" y2="15"/>`},
+  {id:23, zh:"老鼠", trad:"The Mice", kw:"耗損", text:"暗示緩慢的流失、壓力或焦慮感。留意那些正在悄悄消耗你的事物。",
+   svg:`<circle cx="42" cy="55" r="16"/><polygon points="30,42 20,32 34,38"/><polygon points="54,42 64,32 50,38"/><path d="M58,60 Q80,55 88,72"/>`},
+  {id:24, zh:"心", trad:"The Heart", kw:"真情", text:"情感層面的核心議題浮現,關乎愛與真誠。順著心的方向前進。",
+   svg:`<path d="M50,85 C10,55 20,20 50,38 C80,20 90,55 50,85 Z"/>`},
+  {id:25, zh:"戒指", trad:"The Ring", kw:"承諾", text:"代表約定、合作或延續性的關係。適合簽下協議或確認彼此的承諾。",
+   svg:`<circle cx="50" cy="55" r="24"/><circle cx="50" cy="55" r="13"/>`},
+  {id:26, zh:"書本", trad:"The Book", kw:"未知", text:"隱藏的知識或尚未揭曉的訊息。保持好奇心,答案會在深入後浮現。",
+   svg:`<path d="M50,25 C38,18 25,18 18,22 V78 C25,74 38,74 50,81 C62,74 75,74 82,78 V22 C75,18 62,18 50,25 Z"/><line x1="50" y1="25" x2="50" y2="81"/>`},
+  {id:27, zh:"信件", trad:"The Letter", kw:"訊息", text:"文字、文件或具體的消息即將出現。留意近期收到的任何書面資訊。",
+   svg:`<rect x="15" y="28" width="70" height="46"/><polyline points="15,28 50,58 85,28"/>`},
+  {id:28, zh:"男士", trad:"The Man", kw:"陽性能量", text:"代表生命中重要的男性角色,或理性、主動的一面。",
+   svg:`<circle cx="50" cy="28" r="13"/><polygon points="32,88 50,45 68,88"/>`},
+  {id:29, zh:"女士", trad:"The Woman", kw:"陰性能量", text:"代表生命中重要的女性角色,或直覺、包容的一面。",
+   svg:`<circle cx="50" cy="26" r="12"/><path d="M35,88 Q30,55 50,42 Q70,55 65,88 Z"/>`},
+  {id:30, zh:"百合花", trad:"The Lily", kw:"沉靜", text:"象徵成熟、平靜與長輩般的智慧。急躁在此刻派不上用場。",
+   svg:`<line x1="50" y1="90" x2="50" y2="55"/><path d="M50,55 C30,50 30,20 50,15 C70,20 70,50 50,55 Z"/><path d="M50,55 C36,55 25,40 30,25"/><path d="M50,55 C64,55 75,40 70,25"/>`},
+  {id:31, zh:"太陽", trad:"The Sun", kw:"光明", text:"代表成功、活力與清晰可見的好結果。這是值得慶祝的能量。",
+   svg:`<circle cx="50" cy="50" r="18"/><line x1="50" y1="10" x2="50" y2="22"/><line x1="50" y1="78" x2="50" y2="90"/><line x1="10" y1="50" x2="22" y2="50"/><line x1="78" y1="50" x2="90" y2="50"/><line x1="22" y1="22" x2="30" y2="30"/><line x1="70" y1="70" x2="78" y2="78"/><line x1="78" y1="22" x2="70" y2="30"/><line x1="30" y1="70" x2="22" y2="78"/>`},
+  {id:32, zh:"月亮", trad:"The Moon", kw:"直覺", text:"情感與名譽的課題浮現,內在感受比外在評價更重要。相信直覺。",
+   svg:`<circle cx="48" cy="50" r="30"/><circle cx="62" cy="42" r="27" style="fill:var(--bg);stroke:none;"/>`},
+  {id:33, zh:"鑰匙", trad:"The Key", kw:"解答", text:"關鍵的解方或轉機已經出現。這把鑰匙能打開你正在尋找的門。",
+   svg:`<circle cx="30" cy="50" r="14"/><line x1="42" y1="50" x2="85" y2="50"/><line x1="70" y1="50" x2="70" y2="62"/><line x1="80" y1="50" x2="80" y2="60"/>`},
+  {id:34, zh:"魚", trad:"The Fish", kw:"豐盛", text:"與財務、資源流動有關,暗示豐收或需要妥善管理的收穫。",
+   svg:`<path d="M15,50 Q40,20 70,50 Q40,80 15,50 Z"/><polyline points="70,50 90,35 90,65 70,50"/>`},
+  {id:35, zh:"錨", trad:"The Anchor", kw:"穩定", text:"象徵穩固、長期投入與踏實的成果。值得堅持下去的事,就在眼前。",
+   svg:`<circle cx="50" cy="20" r="8"/><line x1="50" y1="28" x2="50" y2="80"/><line x1="30" y1="40" x2="70" y2="40"/><path d="M25,60 Q30,85 50,88"/><path d="M75,60 Q70,85 50,88"/>`},
+  {id:36, zh:"十字架", trad:"The Cross", kw:"考驗", text:"代表必經的課題或命運般的安排。承擔之後,會理解它的意義。",
+   svg:`<line x1="50" y1="12" x2="50" y2="88"/><line x1="25" y1="38" x2="75" y2="38"/>`},
+];
+
+/* ---------- DOM ---------- */
+const video = document.getElementById('cam');
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status');
+const errorBanner = document.getElementById('errorBanner');
+const startScreen = document.getElementById('startScreen');
+const startBtn = document.getElementById('startBtn');
+const cardPanel = document.getElementById('cardPanel');
+const cardBody = document.getElementById('cardBody');
+const redrawBtn = document.getElementById('redrawBtn');
+
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ---------- 常數 ---------- */
+const CHARGE_THRESH = 2.5;      // 兩掌心距離 / 單手掌寬 的正規化閾值
+const CHARGE_MIN_RATE = 6;      // %/秒,剛進入閾值時的充能速度
+const CHARGE_MAX_RATE = 55;     // %/秒,兩掌完全貼近時的充能速度
+const DECAY_RATE = 18;          // %/秒,手分開時的衰減速度(漸進,不瞬間歸零)
+const HOLD_MS = 800;            // 充滿後需維持的時間
+const PARTICLE_COUNT = reducedMotion ? 140 : 420;
+
+/* ---------- 狀態 ---------- */
+let handLandmarker = null;
+let running = false;
+let lastTs = performance.now();
+
+const state = {
+  numHands: 0,
+  charge: 0,
+  chargeHoldStart: null,
+  entropyAcc: 0x9e3779b9 >>> 0,
+  phase: 'gathering', // gathering -> collapsing -> bursting -> revealed
+  phaseStart: 0,
+  drawnCardIndex: null,
+  center: {x:0, y:0},      // 目前繪製用的（平滑後）中心
+  targetCenter: {x:0, y:0} // 由手勢決定的目標中心
+};
+
+let particles = [];
+
+/* ---------- 工具函式 ---------- */
+function lerp(a,b,t){ return a+(b-a)*t; }
+function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+
+function palmCenterPx(lm, vw, vh){
+  const idxs = [0,5,9,13,17];
+  let sx=0, sy=0;
+  for(const i of idxs){ sx += lm[i].x*vw; sy += lm[i].y*vh; }
+  return {x: sx/idxs.length, y: sy/idxs.length};
+}
+function palmWidthPx(lm, vw, vh){
+  const a = lm[5], b = lm[17];
+  return Math.hypot((a.x-b.x)*vw, (a.y-b.y)*vh);
+}
+
+/* xorshift32 混合，把手勢座標的低位小數位混進 32-bit 熵池（不使用 Math.random） */
+function mixEntropy(landmarks){
+  let acc = state.entropyAcc;
+  for(const lm of landmarks){
+    for(const coord of [lm.x, lm.y, lm.z || 0]){
+      const frac = (coord*1e6) % 1;
+      const bits = Math.floor(Math.abs(frac) * 4294967296) >>> 0;
+      acc = (acc ^ bits) >>> 0;
+      acc ^= acc << 13; acc >>>= 0;
+      acc ^= acc >>> 17;
+      acc ^= acc << 5;  acc >>>= 0;
+    }
+  }
+  state.entropyAcc = acc >>> 0;
+}
+
+/* mulberry32：以熵池數值作種子的決定性 PRNG，只在抽牌那一刻使用一次 */
+function mulberry32(seed){
+  let a = seed >>> 0;
+  return function(){
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = (t + Math.imul(t ^ t >>> 7, 61 | t)) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+/* ---------- 錯誤處理 ---------- */
+function showError(msg){
+  errorBanner.textContent = msg;
+  errorBanner.style.display = 'block';
+}
+function friendlyError(err){
+  const name = err && err.name;
+  if(name === 'NotAllowedError' || name === 'PermissionDeniedError'){
+    return '未取得相機權限。請在瀏覽器設定中允許存取相機後,重新整理頁面再試一次。';
+  }
+  if(name === 'NotFoundError' || name === 'DevicesNotFoundError'){
+    return '找不到可用的相機裝置。';
+  }
+  if(name === 'NotReadableError'){
+    return '相機目前無法使用,可能已被其他應用程式佔用。';
+  }
+  return '初始化失敗:' + (err && err.message ? err.message : String(err));
+}
+
+/* ---------- 相機 ---------- */
+async function initCamera(){
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: 'user', width:{ideal:640}, height:{ideal:480} },
+    audio: false
+  });
+  video.srcObject = stream;
+  await new Promise((resolve) => {
+    video.onloadedmetadata = () => resolve();
+  });
+  await video.play();
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  state.center.x = state.targetCenter.x = canvas.width/2;
+  state.center.y = state.targetCenter.y = canvas.height/2;
+}
+
+/* ---------- MediaPipe HandLandmarker ---------- */
+async function initHandLandmarker(){
+  const vision = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm"
+  );
+  const modelAssetPath = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task";
+  try{
+    handLandmarker = await HandLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath, delegate: "GPU" },
+      runningMode: "VIDEO",
+      numHands: 2
+    });
+  }catch(e){
+    console.warn('GPU delegate 失敗，改用 CPU delegate', e);
+    handLandmarker = await HandLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath, delegate: "CPU" },
+      runningMode: "VIDEO",
+      numHands: 2
+    });
+  }
+}
+
+/* ---------- 粒子系統 ---------- */
+function initParticles(){
+  particles = Array.from({length: PARTICLE_COUNT}, () => ({
+    angle: Math.random()*Math.PI*2,     // 僅用於初始外觀散佈，與抽牌結果無關
+    radius: 140 + Math.random()*160,
+    speed: 0.25 + Math.random()*0.55,
+    depth: Math.random(),
+    x: 0, y: 0, hue: 210, alpha: 0.4
+  }));
+}
+
+function updateParticles(dtSec){
+  const chargeF = state.charge/100;
+  const baseRadius = lerp(230, 80, chargeF);
+  const now = performance.now();
+  const motionScale = reducedMotion ? 0.4 : 1;
+
+  for(const p of particles){
+    let targetR = baseRadius + p.depth*36;
+    let angSpeed = p.speed * (0.4 + chargeF*1.6) * motionScale;
+
+    if(state.phase === 'collapsing'){
+      const t = clamp((now - state.phaseStart)/400, 0, 1);
+      targetR = baseRadius * (1-t);
+      angSpeed *= 3;
+    } else if(state.phase === 'bursting'){
+      const t = clamp((now - state.phaseStart)/500, 0, 1);
+      targetR = 30 + t*260;
+      angSpeed *= 2.2;
+    } else if(state.phase === 'revealed'){
+      targetR = 250 + p.depth*70;
+      angSpeed *= 0.25;
+    }
+
+    p.angle += angSpeed * dtSec;
+    const damp = 1 - Math.pow(0.001, dtSec); // 阻尼：dt 越大追得越快，與畫面更新率無關
+    p.radius += (targetR - p.radius) * damp;
+    p.x = state.center.x + Math.cos(p.angle) * p.radius;
+    p.y = state.center.y + Math.sin(p.angle) * p.radius;
+    p.hue = lerp(210, 45, chargeF);
+
+    if(state.phase === 'bursting'){
+      const t = clamp((now - state.phaseStart)/500, 0, 1);
+      p.alpha = Math.max(0, 1 - t);
+    } else if(state.phase === 'revealed'){
+      p.alpha = 0.18 + p.depth*0.12;
+    } else {
+      p.alpha = 0.32 + chargeF*0.6;
+    }
+  }
+}
+
+function renderParticles(){
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.globalCompositeOperation = 'lighter';
+  const chargeF = state.charge/100;
+  for(const p of particles){
+    const r = 1.6 + p.depth*1.4 + chargeF*3.2;
+    const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r*3.2);
+    grad.addColorStop(0, `hsla(${p.hue}, 90%, 72%, ${p.alpha})`);
+    grad.addColorStop(1, `hsla(${p.hue}, 90%, 50%, 0)`);
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r*3.2, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+/* ---------- 手勢處理與充能邏輯 ---------- */
+function processHands(result, dtSec){
+  const hands = result.landmarks || [];
+  state.numHands = hands.length;
+  const vw = video.videoWidth, vh = video.videoHeight;
+
+  if(hands.length >= 2){
+    const centerA = palmCenterPx(hands[0], vw, vh);
+    const centerB = palmCenterPx(hands[1], vw, vh);
+    const widthA = palmWidthPx(hands[0], vw, vh);
+    const widthB = palmWidthPx(hands[1], vw, vh);
+    const avgWidth = Math.max(1, (widthA+widthB)/2);
+    const dist = Math.hypot(centerA.x-centerB.x, centerA.y-centerB.y);
+    const normDist = dist/avgWidth;
+
+    state.targetCenter.x = (centerA.x+centerB.x)/2;
+    state.targetCenter.y = (centerA.y+centerB.y)/2;
+
+    if(state.phase === 'gathering'){
+      if(normDist < CHARGE_THRESH){
+        const closeness = clamp((CHARGE_THRESH-normDist)/CHARGE_THRESH, 0, 1);
+        const rate = lerp(CHARGE_MIN_RATE, CHARGE_MAX_RATE, closeness);
+        state.charge = clamp(state.charge + rate*dtSec, 0, 100);
+      } else {
+        state.charge = clamp(state.charge - DECAY_RATE*dtSec, 0, 100);
+      }
+    }
+    mixEntropy(hands[0]);
+    mixEntropy(hands[1]);
+  } else if(hands.length === 1){
+    state.targetCenter = palmCenterPx(hands[0], vw, vh);
+    if(state.phase === 'gathering'){
+      state.charge = clamp(state.charge - DECAY_RATE*dtSec, 0, 100);
+    }
+    mixEntropy(hands[0]);
+  } else {
+    if(state.phase === 'gathering'){
+      state.charge = clamp(state.charge - DECAY_RATE*dtSec, 0, 100);
+    }
+  }
+
+  // 充能維持觸發判定
+  if(state.phase === 'gathering'){
+    if(state.charge >= 100){
+      if(state.chargeHoldStart === null) state.chargeHoldStart = performance.now();
+      else if(performance.now() - state.chargeHoldStart >= HOLD_MS){
+        triggerDraw();
+      }
+    } else {
+      state.chargeHoldStart = null;
+    }
+  }
+}
+
+function triggerDraw(){
+  state.phase = 'collapsing';
+  state.phaseStart = performance.now();
+  const seed = state.entropyAcc || 0x1234abcd;
+  const rand = mulberry32(seed);
+  state.drawnCardIndex = Math.floor(rand() * CARDS.length);
+}
+
+function renderCard(idx){
+  const c = CARDS[idx];
+  cardBody.innerHTML = `
+    <svg class="card-icon-svg" viewBox="0 0 100 100">${c.svg}</svg>
+    <div class="card-num">第 ${String(c.id).padStart(2,'0')} 號</div>
+    <h2 class="card-name">${c.zh}</h2>
+    <div class="card-trad">${c.trad}</div>
+    <div class="card-keyword">${c.kw}</div>
+    <p class="card-text">${c.text}</p>
+  `;
+}
+
+function updateStatusUI(){
+  statusEl.textContent = `充能 ${Math.round(state.charge)}% · 偵測到 ${state.numHands} 隻手`;
+}
+
+/* ---------- 主迴圈 ---------- */
+function frameLoop(ts){
+  const dtSec = clamp((ts - lastTs)/1000, 0, 0.05);
+  lastTs = ts;
+
+  if(handLandmarker && video.readyState >= 2){
+    const result = handLandmarker.detectForVideo(video, ts);
+    processHands(result, dtSec);
+  }
+
+  // 平滑中心點，避免抖動
+  state.center.x = lerp(state.center.x, state.targetCenter.x, 0.18);
+  state.center.y = lerp(state.center.y, state.targetCenter.y, 0.18);
+
+  // 階段轉換
+  const now = performance.now();
+  if(state.phase === 'collapsing' && now - state.phaseStart >= 400){
+    state.phase = 'bursting';
+    state.phaseStart = now;
+  } else if(state.phase === 'bursting' && now - state.phaseStart >= 500){
+    state.phase = 'revealed';
+    state.phaseStart = now;
+    renderCard(state.drawnCardIndex);
+    cardPanel.classList.add('show');
+    state.charge = 0;
+    state.chargeHoldStart = null;
+  }
+
+  updateParticles(dtSec);
+  renderParticles();
+  updateStatusUI();
+
+  if(running) requestAnimationFrame(frameLoop);
+}
+
+/* ---------- 事件 ---------- */
+redrawBtn.addEventListener('click', () => {
+  cardPanel.classList.remove('show');
+  state.phase = 'gathering';
+  state.charge = 0;
+  state.chargeHoldStart = null;
+});
+
+startBtn.addEventListener('click', async () => {
+  if(!window.isSecureContext){
+    showError('此頁面需要透過 HTTPS 安全連線開啟才能使用相機權限（GitHub Pages 預設即為 HTTPS）。');
+    return;
+  }
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    showError('此瀏覽器不支援相機存取（getUserMedia）,請改用較新版本的 Chrome、Safari 或 Edge。');
+    return;
+  }
+  startBtn.disabled = true;
+  startBtn.textContent = '啟動中…';
+  try{
+    await Promise.all([initCamera(), initHandLandmarker()]);
+    initParticles();
+    startScreen.classList.add('hidden');
+    running = true;
+    lastTs = performance.now();
+    requestAnimationFrame(frameLoop);
+  }catch(err){
+    console.error(err);
+    showError(friendlyError(err));
+    startBtn.disabled = false;
+    startBtn.textContent = '重新開始';
+  }
+});
+
+/* 頁面載入時先行檢查安全連線 */
+if(!window.isSecureContext){
+  showError('此頁面需要透過 HTTPS 安全連線開啟才能使用相機權限（GitHub Pages 預設即為 HTTPS）。');
+  startBtn.disabled = true;
+}
+</script>
+</body>
+</html>
