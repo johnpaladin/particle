@@ -144,7 +144,7 @@
   <div id="startScreen">
     <div class="start-inner">
       <h1>手勢聚氣占卜</h1>
-      <p>雙手於胸前相對,五指張開如蓮花綻放,<br>掌根緩緩靠近,能量會隨之聚集。<br>充滿並停留片刻,即可抽出一張命運之牌。</p>
+      <p>雙手於胸前靠近,以手背相貼、掌心朝外的<br>不自然姿勢緩緩聚氣。<br>充滿並停留片刻,即可抽出一張命運之牌。</p>
       <button id="startBtn">開始占卜</button>
       <p class="hint">需要開啟相機權限。影像僅在裝置本機端運算,不會上傳或儲存。</p>
     </div>
@@ -251,11 +251,11 @@ const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matc
 /* ---------- 常數 ---------- */
 const CHARGE_THRESH = 2.5;      // 兩掌根(手腕)距離 / 單手掌寬 的正規化閾值
 const CHARGE_MIN_RATE = 6;      // %/秒,剛進入閾值時的充能速度
-const CHARGE_MAX_RATE = 55;     // %/秒,兩掌根完全貼近且指尖展開時的充能速度
-const DECAY_RATE = 18;          // %/秒,手分開或收攏時的衰減速度(漸進,不瞬間歸零)
+const CHARGE_MAX_RATE = 55;     // %/秒,兩掌根完全貼近且手背朝外時的充能速度
+const DECAY_RATE = 18;          // %/秒,手分開或姿勢不對時的衰減速度(漸進,不瞬間歸零)
 const HOLD_MS = 800;            // 充滿後需維持的時間
-const SPREAD_MIN = 0.32;        // 指尖平均間距 / 掌寬，低於此視為手指未張開（拳狀）
-const SPREAD_FULL = 0.62;       // 達到此比例視為手指完全展開（蓮花狀）
+// 手背相貼的「朝向」判定是用 2D 叉積估計，實機測試方向若相反，把這個值改成 -1 即可，不必動其他數學
+const BACK_ORIENTATION_SIGN = 1;
 const PARTICLE_COUNT = reducedMotion ? 140 : 420;
 
 /* ---------- 狀態 ---------- */
@@ -288,16 +288,22 @@ function palmWidthPx(lm, vw, vh){
 function wristPx(lm, vw, vh){
   return {x: lm[0].x*vw, y: lm[0].y*vh};
 }
-/* 五指指尖(拇指~小指)相鄰間距的平均值，除以掌寬做正規化：數值越大代表手指張得越開（蓮花／鑽石手勢） */
-function fingerSpreadRatio(lm, vw, vh, palmWidth){
-  const tipIdx = [4, 8, 12, 16, 20];
-  const tips = tipIdx.map(i => ({x: lm[i].x*vw, y: lm[i].y*vh}));
-  let total = 0;
-  for(let i=0; i<tips.length-1; i++){
-    total += Math.hypot(tips[i].x-tips[i+1].x, tips[i].y-tips[i+1].y);
-  }
-  const avgGap = total / (tips.length-1);
-  return avgGap / Math.max(1, palmWidth);
+/*
+ * 估計「手背是否朝向鏡頭」：用手腕(0)→食指根(5)與手腕(0)→小指根(17)兩個向量的
+ * 2D 叉積正負號，判斷目前看到的是掌心還是手背；左右手的叉積正負相反，需搭配
+ * handedness 校正。這只是幾何近似（單眼深度不可靠），回傳 0~1，1 代表手背朝鏡頭。
+ * 如果實機測試發現方向相反，調整上方的 BACK_ORIENTATION_SIGN 即可。
+ */
+function backFacingFactor(lm, vw, vh, handednessLabel, palmWidth){
+  const wrist = {x: lm[0].x*vw, y: lm[0].y*vh};
+  const idxMcp = {x: lm[5].x*vw, y: lm[5].y*vh};
+  const pinkyMcp = {x: lm[17].x*vw, y: lm[17].y*vh};
+  const v1x = idxMcp.x-wrist.x, v1y = idxMcp.y-wrist.y;
+  const v2x = pinkyMcp.x-wrist.x, v2y = pinkyMcp.y-wrist.y;
+  const cross = v1x*v2y - v1y*v2x;
+  const handSign = handednessLabel === 'Right' ? 1 : -1;
+  const normalized = (cross*handSign*BACK_ORIENTATION_SIGN) / Math.max(1, palmWidth*palmWidth);
+  return clamp(-normalized*2.2, 0, 1);
 }
 
 /* xorshift32 混合，把手勢座標的低位小數位混進 32-bit 熵池（不使用 Math.random） */
@@ -457,6 +463,7 @@ function renderParticles(){
 /* ---------- 手勢處理與充能邏輯 ---------- */
 function processHands(result, dtSec){
   const hands = result.landmarks || [];
+  const handedness = result.handedness || [];
   state.numHands = hands.length;
   const vw = video.videoWidth, vh = video.videoHeight;
 
@@ -469,21 +476,21 @@ function processHands(result, dtSec){
     const wristDist = Math.hypot(wristA.x-wristB.x, wristA.y-wristB.y);
     const normDist = wristDist/avgWidth;
 
-    // 蓮花／鑽石手勢：掌根（手腕）靠近，同時兩手五指張開如扇
-    const spreadA = fingerSpreadRatio(hands[0], vw, vh, widthA);
-    const spreadB = fingerSpreadRatio(hands[1], vw, vh, widthB);
-    const spreadFactorA = clamp((spreadA-SPREAD_MIN)/(SPREAD_FULL-SPREAD_MIN), 0, 1);
-    const spreadFactorB = clamp((spreadB-SPREAD_MIN)/(SPREAD_FULL-SPREAD_MIN), 0, 1);
-    const spreadFactor = spreadFactorA * spreadFactorB;
+    // 手背貼手背的不自然手勢：掌根（手腕）靠近，同時兩手的手背朝向鏡頭
+    const labelA = (handedness[0] && handedness[0][0] && handedness[0][0].categoryName) || 'Right';
+    const labelB = (handedness[1] && handedness[1][0] && handedness[1][0].categoryName) || 'Right';
+    const backA = backFacingFactor(hands[0], vw, vh, labelA, widthA);
+    const backB = backFacingFactor(hands[1], vw, vh, labelB, widthB);
+    const orientationFactor = backA * backB;
 
     // 粒子聚集點：兩掌根的中點，對應手勢中符文浮現的位置
     state.targetCenter.x = (wristA.x+wristB.x)/2;
     state.targetCenter.y = (wristA.y+wristB.y)/2;
 
     if(state.phase === 'gathering'){
-      if(normDist < CHARGE_THRESH && spreadFactor > 0){
+      if(normDist < CHARGE_THRESH && orientationFactor > 0){
         const closeness = clamp((CHARGE_THRESH-normDist)/CHARGE_THRESH, 0, 1);
-        const rate = lerp(CHARGE_MIN_RATE, CHARGE_MAX_RATE, closeness) * spreadFactor;
+        const rate = lerp(CHARGE_MIN_RATE, CHARGE_MAX_RATE, closeness) * orientationFactor;
         state.charge = clamp(state.charge + rate*dtSec, 0, 100);
       } else {
         state.charge = clamp(state.charge - DECAY_RATE*dtSec, 0, 100);
